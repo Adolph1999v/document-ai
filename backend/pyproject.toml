@@ -1,0 +1,31 @@
+[project]
+name = "document-ai-backend"
+version = "0.2.0"
+description = "A learning-focused, production-minded RAG chatbot backend."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "google-genai>=1.0,<2.0",
+    "pdfplumber>=0.11,<1.0",
+    "psycopg2-binary>=2.9,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "python-multipart>=0.0.9,<1.0",
+    "sentence-transformers>=3.0,<6.0",
+    "uvicorn[standard]>=0.30,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9.0",
+    "ruff>=0.11,<1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
