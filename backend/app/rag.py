@@ -36,6 +36,8 @@ class AnswerGenerationError(RuntimeError):
 
 @dataclass(frozen=True)
 class TextChunk:
+    """A page-aware chunk produced during ingestion, before embedding."""
+
     page_number: int
     chunk_index: int
     content: str
@@ -43,6 +45,8 @@ class TextChunk:
 
 @dataclass(frozen=True)
 class RetrievedChunk:
+    """A stored chunk returned by vector search with its similarity score."""
+
     page_number: int
     chunk_index: int
     content: str
@@ -136,8 +140,11 @@ def get_embedding_model() -> SentenceTransformer:
 
 
 def _embed_texts(texts: Iterable[str]) -> list[list[float]]:
+    """Embed document text and questions in the same normalized vector space."""
+
     embeddings = get_embedding_model().encode(
         list(texts),
+        # Normalization makes cosine comparisons consistent for storage and retrieval.
         normalize_embeddings=True,
         show_progress_bar=False,
     )
@@ -185,7 +192,7 @@ def index_document(filename: str, chunks: list[TextChunk]) -> UUID:
 
 
 def retrieve_chunks(document_id: UUID, question: str) -> list[RetrievedChunk]:
-    """Retrieve the most semantically similar chunks for one document only."""
+    """Retrieve semantically similar chunks without crossing document boundaries."""
 
     question_embedding = _to_vector_literal(_embed_texts([question])[0])
 
