@@ -1,5 +1,6 @@
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
+// Centralize response parsing so every frontend request exposes API errors consistently.
 async function request(path, options = {}) {
   let response;
 
@@ -9,6 +10,7 @@ async function request(path, options = {}) {
     throw new Error("Could not reach the API. Make sure the FastAPI server is running.");
   }
 
+  // Some infrastructure errors may not include JSON, so parsing has a safe fallback.
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -19,6 +21,7 @@ async function request(path, options = {}) {
 }
 
 export function uploadDocument(file) {
+  // Browsers send file uploads as multipart form data through FormData.
   const formData = new FormData();
   formData.append("file", file);
 
@@ -29,6 +32,7 @@ export function uploadDocument(file) {
 }
 
 export function askDocumentQuestion({ documentId, question }) {
+  // The document identifier keeps each question scoped to one indexed PDF.
   return request("/api/chat", {
     method: "POST",
     headers: {
