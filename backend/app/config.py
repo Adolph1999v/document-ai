@@ -10,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
+# Load machine-local values before the cached Settings object is constructed.
+# Existing process environment variables keep priority over values in this file.
 load_dotenv(BACKEND_DIRECTORY / ".env")
 
 
@@ -29,6 +31,8 @@ def _read_int(name: str, default: int) -> int:
 
 
 def _read_origins() -> tuple[str, ...]:
+    """Convert the comma-separated CORS setting into validated origins."""
+
     configured_origins = os.getenv(
         "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
     )
@@ -59,6 +63,8 @@ class Settings:
 
     @property
     def database_connection_parameters(self) -> dict[str, str | int]:
+        """Expose only the values required when opening a database connection."""
+
         parameters: dict[str, str | int] = {
             "host": self.database_host,
             "port": self.database_port,
