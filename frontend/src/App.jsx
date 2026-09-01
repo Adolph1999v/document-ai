@@ -19,6 +19,9 @@ function isPdf(file) {
 
 function App() {
   const fileInputRef = useRef(null);
+
+  // Document, conversation, and feedback state are kept separate so each UI
+  // section can reflect its own stage of the upload-and-question workflow.
   const [selectedFile, setSelectedFile] = useState(null);
   const [document, setDocument] = useState(null);
   const [question, setQuestion] = useState("");
@@ -29,6 +32,7 @@ function App() {
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
 
+  // Choosing a replacement file clears results tied to the previously indexed PDF.
   const chooseFile = (file) => {
     if (!file) {
       return;
@@ -62,6 +66,7 @@ function App() {
     chooseFile(event.dataTransfer.files?.[0]);
   };
 
+  // Uploading also performs backend extraction, chunking, embedding, and storage.
   const handleUpload = async () => {
     if (!selectedFile || uploadState === "uploading") {
       return;
@@ -82,6 +87,7 @@ function App() {
     }
   };
 
+  // Questions are submitted only after the backend returns a document identifier.
   const handleQuestionSubmit = async (event) => {
     event.preventDefault();
 
