@@ -11,6 +11,8 @@ class HealthResponse(BaseModel):
     status: str
 
 
+# Upload responses expose enough ingestion metadata for the client to confirm
+# which document was indexed before it begins sending questions.
 class DocumentUploadResponse(BaseModel):
     document_id: UUID
     filename: str
@@ -18,11 +20,14 @@ class DocumentUploadResponse(BaseModel):
     chunks_stored: int = Field(ge=1)
 
 
+# Each chat request is scoped to one previously indexed document.
 class ChatRequest(BaseModel):
     document_id: UUID
     question: str = Field(min_length=1, max_length=2_000)
 
 
+# Retrieved evidence stays structured so the UI can present source details
+# independently from the generated answer text.
 class RetrievedSource(BaseModel):
     page_number: int = Field(ge=1)
     chunk_index: int = Field(ge=0)
