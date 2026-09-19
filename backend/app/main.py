@@ -7,16 +7,19 @@ from pathlib import Path
 from typing import Annotated
 
 import psycopg2
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import DatabaseConnectionError
+from .database import DatabaseConnectionError, check_database_readiness
+from .local_llm import (
+    LocalModelResponseError,
+    LocalModelUnavailableError,
+    get_local_llm_client,
+)
 from .rag import (
-    AnswerGenerationError,
     DocumentNotFoundError,
     DocumentProcessingError,
-    GenerationConfigurationError,
     extract_chunks,
     generate_answer,
     index_document,
@@ -25,8 +28,10 @@ from .rag import (
 from .schemas import (
     ChatRequest,
     ChatResponse,
+    DependencyReadinessResponse,
     DocumentUploadResponse,
     HealthResponse,
+    ReadinessResponse,
     RetrievedSource,
 )
 
@@ -35,7 +40,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title=settings.app_name,
     description="A learning-focused, production-minded RAG chatbot for PDFs.",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -55,6 +60,34 @@ def root() -> dict[str, str]:
 @app.get("/api/health", response_model=HealthResponse, tags=["system"])
 def health_check() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get(
+    "/api/readiness",
+    response_model=ReadinessResponse,
+    tags=["system"],
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ReadinessResponse}},
+)
+def readiness_check(response: Response) -> ReadinessResponse:
+    """Report whether both external runtime dependencies can serve requests."""
+
+    database = check_database_readiness()
+    local_model = get_local_llm_client().check_readiness()
+    is_ready = database.ready and local_model.ready
+    if not is_ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return ReadinessResponse(
+        status="ready" if is_ready else "not_ready",
+        database=DependencyReadinessResponse(
+            ready=database.ready,
+            detail=database.detail,
+        ),
+        local_model=DependencyReadinessResponse(
+            ready=local_model.ready,
+            detail=local_model.detail,
+        ),
+    )
 
 
 @app.post(
@@ -85,10 +118,14 @@ def upload_document(file: Annotated[UploadFile, File(...)]) -> DocumentUploadRes
         chunks, pages_with_text = extract_chunks(pdf_bytes)
         document_id = index_document(filename, chunks)
     except DocumentProcessingError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
     except DatabaseConnectionError as error:
         logger.exception("Database connection failed while indexing a document.")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from error
     except psycopg2.Error as error:
         logger.exception("Database error while indexing a document.")
         raise HTTPException(
@@ -120,14 +157,18 @@ def chat(request: ChatRequest) -> ChatResponse:
         answer = generate_answer(question, retrieved_chunks)
     except DocumentNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    except GenerationConfigurationError as error:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
-    except AnswerGenerationError as error:
-        logger.exception("The language model returned no answer.")
+    except LocalModelUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from error
+    except LocalModelResponseError as error:
+        logger.exception("The local language model returned an invalid answer.")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
     except DatabaseConnectionError as error:
         logger.exception("Database connection failed while retrieving context.")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from error
     except psycopg2.Error as error:
         logger.exception("Database error while retrieving context.")
         raise HTTPException(

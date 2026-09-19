@@ -1,11 +1,11 @@
 [project]
 name = "document-ai-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "A learning-focused, production-minded RAG chatbot backend."
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi>=0.115,<1.0",
-    "google-genai>=1.0,<2.0",
+    "httpx>=0.28,<1.0",
     "pdfplumber>=0.11,<1.0",
     "psycopg2-binary>=2.9,<3.0",
     "python-dotenv>=1.0,<2.0",

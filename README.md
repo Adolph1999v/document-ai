@@ -12,7 +12,8 @@ This repository is intentionally evolving in public: each phase should make the 
 - Embeds chunks with the `all-MiniLM-L6-v2` sentence-transformer model.
 - Stores chunks and embeddings in PostgreSQL with the `pgvector` extension.
 - Retrieves the most similar chunks for a question using cosine distance.
-- Sends the retrieved context to Google Gemini and returns an answer with page references.
+- Sends the retrieved context to a local Qwen 27B model through LM Studio.
+- Returns the grounded answer together with page references and retrieved evidence.
 
 ## The RAG flow
 
@@ -28,7 +29,7 @@ Question
    │
    ├─ Create a question embedding
    ├─ Retrieve the nearest chunks for that document
-   ├─ Build grounded context for Gemini
+   ├─ Build grounded context for local Qwen
    └─ Return an answer + source page metadata to the UI
 ```
 
@@ -43,17 +44,21 @@ RAG stands for **Retrieval-Augmented Generation**. Retrieval gives the model rel
 | PDF ingestion | pdfplumber | Extracts text while retaining page boundaries. |
 | Embeddings | Sentence Transformers (`all-MiniLM-L6-v2`) | Converts text into 384-dimensional semantic vectors. |
 | Vector store | PostgreSQL + pgvector | Keeps document metadata and vectors in one familiar database. |
-| Answer generation | Google Gemini | Produces a natural-language answer from retrieved context. |
+| Local inference | LM Studio | Runs the generation model behind a loopback-only REST interface. |
+| Answer generation | Qwen 3.6 27B (`Q6_K`) | Produces grounded answers locally without provider quotas. |
 
 ## Project layout
 
 ```text
 document_ai/
+├── compose.yaml            # Reproducible local PostgreSQL/pgvector service
 ├── Makefile                # Common setup, run, test, and build commands
+├── PLAN.md                 # Living, phase-by-phase learning and development roadmap
 ├── backend/
 │   ├── app/
 │   │   ├── config.py       # Environment-based settings
 │   │   ├── database.py     # PostgreSQL connection boundary
+│   │   ├── local_llm.py    # LM Studio/Qwen client and readiness boundary
 │   │   ├── main.py         # FastAPI routes and HTTP handling
 │   │   ├── rag.py          # Ingestion, embedding, retrieval, generation
 │   │   └── schemas.py      # Request/response contracts
@@ -77,35 +82,76 @@ document_ai/
 - `uv` (it will provision the pinned Python 3.13 runtime automatically)
 - Python 3.11–3.13 if you prefer to provide the interpreter yourself
 - Node.js 20.19+ (the current Vite baseline)
-- PostgreSQL with the `pgvector` extension installed
-- A Google AI API key with access to the selected Gemini model
+- Docker Desktop for the reproducible PostgreSQL/pgvector service
+- LM Studio with its `lms` command-line tool
+- The local `qwen/qwen3.6-27b` model downloaded in LM Studio
 
-### 1. Configure PostgreSQL
+No external model account or API key is required.
 
-Create a database named `document_ai`, then run the schema once:
-
-```bash
-psql -d document_ai -f backend/sql/schema.sql
-```
-
-The schema creates a new `document_chunks` table. It does not alter the older prototype table, so the cleanup is safe to adopt without deleting prior experiments.
-
-### 2. Configure and run the backend
+### 1. Install project dependencies
 
 ```bash
-cd backend
-uv sync --all-groups
-cp .env.example .env
-uv run uvicorn main:app --reload
+make setup
+cp backend/.env.example backend/.env
 ```
 
-Fill in `backend/.env` before starting the server—especially `GOOGLE_API_KEY` and the database values. Do not commit that file.
+The `.env` file is machine-local and ignored by Git. The checked-in example already matches the
+development database and LM Studio defaults.
+
+### 2. Start PostgreSQL and pgvector
+
+Start Docker Desktop, then run:
+
+```bash
+make db-up
+make db-status
+```
+
+The first start creates the `document_ai` database, enables pgvector, and applies
+`backend/sql/schema.sql`. The database is bound only to `127.0.0.1`. To reapply the idempotent
+schema later, run `make db-init`. Use `make db-stop` to stop PostgreSQL without deleting its data.
+
+### 3. Start LM Studio and load Qwen
+
+Start LM Studio's local server from its Developer tab, or run:
+
+```bash
+make model-server
+make model-load
+make model-status
+```
+
+If the server is already running, skip `make model-server`. The project loads Qwen with a 32,768
+token context window. LM Studio estimates about 28.5 GiB for this configuration on the development
+Mac, leaving headroom instead of attempting the model's much larger maximum context.
+
+Generation requests stay on `127.0.0.1:1234`, disable model-side reasoning for the first measured
+RAG baseline, and do not ask LM Studio to store chat state.
+
+When development is finished, run `make model-unload` to free the memory used by Qwen and then
+`make model-server-stop` to stop the local endpoint. These are separate actions: stopping the
+server alone does not unload model weights that are already in memory.
+
+### 4. Start and check the backend
+
+```bash
+make backend-run
+```
 
 The API runs on `http://127.0.0.1:8000`, and interactive FastAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 3. Run the frontend
+In another terminal, verify both runtime dependencies:
 
-Open a second terminal:
+```bash
+make readiness
+```
+
+`/api/health` reports whether FastAPI itself is alive. `/api/readiness` separately checks whether
+PostgreSQL is accepting queries and whether the configured Qwen model is loaded.
+
+### 5. Run the frontend
+
+Open another terminal:
 
 ```bash
 cd frontend
@@ -119,13 +165,24 @@ Vite serves the frontend at `http://localhost:5173`. During local development, `
 
 `uv` is a Rust-based Python package manager and project tool. It resolves and installs packages quickly while keeping everything inside `backend/.venv`, so this project's versions do not conflict with globally installed Python packages. `backend/pyproject.toml` is the source of truth, `backend/.python-version` selects Python 3.13, `backend/uv.lock` pins the exact resolved versions, and `backend/requirements.txt` remains available for tools that expect the traditional pip format.
 
-You can use the root `Makefile` for common tasks after setup: `make setup`, `make backend-run`, `make frontend-run`, `make test`, `make lint`, and `make build`.
+You can use the root `Makefile` for dependency setup, database lifecycle, local-model loading,
+readiness checks, development servers, tests, linting, and frontend builds. Run `make help` for
+the complete list.
+
+### Why local Qwen?
+
+Local generation allows repeated experiments without provider quotas and keeps retrieved document
+context on the machine. The model weights and inference runtime remain separate from FastAPI:
+LM Studio owns the large model and memory, while the backend sends it one grounded prompt at a
+time. The local HTTP boundary also lets the API report clear model-server failures instead of
+crashing or loading 27 billion parameters inside every backend process.
 
 ## API contract
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Lightweight service health check. |
+| `GET` | `/api/readiness` | Check PostgreSQL and the loaded local Qwen model. |
 | `POST` | `/api/documents` | Upload and index one PDF. Returns a `document_id`. |
 | `POST` | `/api/chat` | Ask a question scoped to a `document_id`. Returns an answer and source metadata. |
 
@@ -137,12 +194,11 @@ This is now a clean RAG foundation, not a finished enterprise retrieval system. 
 
 Those are valuable next steps, but each adds a new concept. We will introduce them in a measured order so the architecture remains understandable.
 
-## Suggested learning roadmap
+## Project roadmap
 
-1. **Measure the baseline** — create a small question-and-answer evaluation set for a few documents and learn how to judge retrieval quality separately from answer quality.
-2. **Improve ingestion** — handle scanned PDFs/OCR, headings, tables, metadata, and better semantic chunking.
-3. **Improve retrieval** — add metadata filters, hybrid search, query rewriting, and reranking; compare each change against the baseline.
-4. **Improve answers** — expose citations, abstain when evidence is weak, stream responses, and introduce conversation-aware retrieval carefully.
-5. **Make it operational** — add tests, observability, rate limits, async ingestion, authentication, and deployment.
+The living roadmap is maintained in [PLAN.md](PLAN.md). It records completed work, the local-model
+direction, the theory-first workflow, phase checklists, completion criteria, and the project
+decision log.
 
-The rule for this project: every new RAG technique should answer a clear question—**what failure mode does it solve, and how will we prove that it helped?**
+The rule for this project remains: every new RAG technique should answer a clear question—**what
+failure mode does it solve, and how will we prove that it helped?**
