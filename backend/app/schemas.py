@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,17 @@ from pydantic import BaseModel, Field
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class DependencyReadinessResponse(BaseModel):
+    ready: bool
+    detail: str
+
+
+class ReadinessResponse(BaseModel):
+    status: Literal["ready", "not_ready"]
+    database: DependencyReadinessResponse
+    local_model: DependencyReadinessResponse
 
 
 # Upload responses expose enough ingestion metadata for the client to confirm

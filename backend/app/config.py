@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -33,13 +34,23 @@ def _read_int(name: str, default: int) -> int:
 def _read_origins() -> tuple[str, ...]:
     """Convert the comma-separated CORS setting into validated origins."""
 
-    configured_origins = os.getenv(
-        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-    )
+    configured_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     origins = tuple(origin.strip() for origin in configured_origins.split(",") if origin.strip())
     if not origins:
         raise ValueError("CORS_ORIGINS must contain at least one origin.")
     return origins
+
+
+def _read_local_llm_base_url() -> str:
+    """Accept only a loopback LM Studio endpoint for local-only generation."""
+
+    value = os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:1234/api/v1").rstrip("/")
+    parsed_url = urlparse(value)
+    if parsed_url.scheme != "http" or parsed_url.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(
+            "LOCAL_LLM_BASE_URL must be an HTTP endpoint on localhost or a loopback address."
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -47,8 +58,12 @@ class Settings:
     """The small, explicit configuration surface of this first RAG foundation."""
 
     app_name: str
-    google_api_key: str | None
-    gemini_model: str
+    local_llm_base_url: str
+    local_llm_model: str
+    local_llm_timeout_seconds: int
+    local_llm_context_length: int
+    local_llm_max_output_tokens: int
+    local_llm_reasoning: str
     database_host: str
     database_port: int
     database_name: str
@@ -85,10 +100,18 @@ def get_settings() -> Settings:
     if chunk_overlap >= chunk_size:
         raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
 
+    local_llm_reasoning = os.getenv("LOCAL_LLM_REASONING", "off").strip().lower()
+    if local_llm_reasoning not in {"off", "on"}:
+        raise ValueError("LOCAL_LLM_REASONING must be either 'off' or 'on'.")
+
     return Settings(
         app_name="Document AI",
-        google_api_key=os.getenv("GOOGLE_API_KEY") or None,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+        local_llm_base_url=_read_local_llm_base_url(),
+        local_llm_model=os.getenv("LOCAL_LLM_MODEL", "qwen/qwen3.6-27b"),
+        local_llm_timeout_seconds=_read_int("LOCAL_LLM_TIMEOUT_SECONDS", 300),
+        local_llm_context_length=_read_int("LOCAL_LLM_CONTEXT_LENGTH", 32_768),
+        local_llm_max_output_tokens=_read_int("LOCAL_LLM_MAX_OUTPUT_TOKENS", 800),
+        local_llm_reasoning=local_llm_reasoning,
         database_host=os.getenv("DATABASE_HOST", "127.0.0.1"),
         database_port=_read_int("DATABASE_PORT", 5432),
         database_name=os.getenv("DATABASE_NAME", "document_ai"),
